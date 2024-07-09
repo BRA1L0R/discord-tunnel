@@ -1,0 +1,14 @@
+[package]
+name = "weird-tun"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.86"
+base64 = "0.22.1"
+clap = { version = "4.5.9", features = ["derive"] }
+teloxide-core = { version = "0.9.1", default-features = false, features = [
+    "rustls",
+] }
+tokio = { version = "1.38.0", features = ["full"] }
+tun = { version = "0.6.1", features = ["async"] }
