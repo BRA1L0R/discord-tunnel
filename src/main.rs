@@ -1,14 +1,17 @@
-use std::{net::IpAddr, ops::DerefMut};
+use std::{net::IpAddr, ops::DerefMut, time::Duration};
 
-use anyhow::Context;
+use anyhow::{bail, Context};
 use base64::{prelude::BASE64_STANDARD, Engine};
 use clap::Parser;
 use teloxide_core::{
     requests::Requester,
-    types::{ChatId, UpdateKind},
+    types::{ChatId, UpdateKind, UserId},
     Bot,
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    time,
+};
 use tun::{platform::Device, AsyncDevice, Configuration};
 
 #[derive(Parser)]
@@ -33,6 +36,10 @@ struct BotAdapter {
     read_group: ChatId,
     write_group: ChatId,
 
+    write_sequence: u32,
+    read_sequence: u32,
+
+    // set_description: Some(String),
     offset: Option<i32>,
 }
 
@@ -42,6 +49,8 @@ impl BotAdapter {
             bot,
             read_group,
             write_group,
+            write_sequence: 0,
+            read_sequence: 0,
             offset: None,
         }
     }
@@ -49,42 +58,61 @@ impl BotAdapter {
 
 impl BotAdapter {
     async fn read_packet(&mut self) -> anyhow::Result<Vec<u8>> {
-        let message = loop {
-            let mut updates = self.bot.get_updates();
-            updates.offset = self.offset;
-            let updates = updates.await?;
+        loop {
+            let mut set_description = self.bot.set_chat_description(self.read_group);
 
-            self.offset = updates.last().map(|last| last.id + 1);
+            set_description.description = Some(self.read_sequence.to_string());
+            set_description.await.ok();
+            let chat = self.bot.get_chat(self.read_group).await?;
 
-            let message = updates
-                .into_iter()
-                .filter_map(|update| {
-                    return match update.kind {
-                        UpdateKind::Message(message) if message.text().is_some() => Some(message),
-                        _ => None,
-                    };
-                })
-                .next();
+            let title = chat.title().context("PORCOIDIOOO")?;
 
-            if let Some(message) = message {
-                println!("{}", message.chat.id);
-                break message;
+            println!("{title}");
+
+            let mut decoded = base85::decode(title).context("decoding base64")?;
+            let read_sequence: [u8; 4] = decoded.drain(decoded.len() - 4..).enumerate().fold(
+                [0; 4],
+                |mut collector, (i, n)| {
+                    collector[i] = n;
+                    collector
+                },
+            );
+
+            let read_sequence: u32 = u32::from_be_bytes(read_sequence);
+            if read_sequence <= self.read_sequence {
+                time::sleep(Duration::from_millis(1000)).await;
+                continue;
             }
-        };
 
-        let text = message
-            .text()
-            .context("received a message that is not text")?;
-
-        let decoded = BASE64_STANDARD.decode(text).context("decoding base64")?;
-        Ok(decoded)
-        // buffer.copy_from_slice(src)
+            self.read_sequence = read_sequence;
+            return Ok(decoded);
+        }
     }
 
     async fn write_packet(&mut self, buffer: &[u8]) -> anyhow::Result<()> {
-        let encoded = BASE64_STANDARD.encode(buffer);
-        self.bot.send_message(self.group, encoded).await?;
-        // user_filter: u32,
+        // let encoded = BASE64_STANDARD.encode(buffer);
+
+        let mut buffer = Vec::from(buffer);
+        buffer.extend_from_slice(&self.write_sequence.to_be_bytes());
+        self.write_sequence += 1;
+
+        match buffer.len() {
+            409.. => bail!("packet too big!!!"),
+            204..=408 => {
+                let mut set_chat_description = self.bot.set_chat_description(self.write_group);
+                let description = &buffer[204..];
+                let description = base85::encode(&description);
+                set_chat_description.description = Some(description);
+
+                set_chat_description.await?;
+            }
+            _ => (),
+        }
+
+        let title = &buffer[..std::cmp::min(buffer.len(), 204)];
+        let title = base85::encode(title);
+        self.bot.set_chat_title(self.write_group, title).await?;
+
         Ok(())
     }
 }
@@ -103,26 +131,30 @@ async fn main() -> anyhow::Result<()> {
         .up();
 
     let device = Device::new(&config).unwrap();
-    let mut device = AsyncDevice::new(device).unwrap();
+    let mut tun_device = AsyncDevice::new(device).unwrap();
 
-    let mut adapter = BotAdapter::new(telegram.clone(), ChatId(args.group_id));
+    let mut bot_adapter = BotAdapter::new(
+        telegram.clone(),
+        ChatId(args.read_group_id),
+        ChatId(args.write_group_id),
+    );
 
     tokio::spawn(async move {
         let mut buffer = Box::new([0; 1500]);
 
         loop {
             tokio::select! {
-                packet = adapter.read_packet() => {
+                packet = bot_adapter.read_packet() => {
                     let packet = packet.context("error reading from adapter")?;
-                    println!("A -> D: {packet:?}");
-                    if let Err(err) = device.write(&packet).await {
+                    println!("B -> T: {packet:?}");
+                    if let Err(err) = tun_device.write(&packet).await {
                         println!("Error writing to device {err}");
                     };
                 }
-                read = device.read(buffer.deref_mut()) => {
+                read = tun_device.read(buffer.deref_mut()) => {
                     let read = read.context("error reading from device")?;
-                    println!("D -> A: {buffer:?}");
-                    adapter.write_packet(&buffer[..read]).await.context("error writing to adapter")?;
+                    println!("T -> B: {:?}", &buffer[..read]);
+                    bot_adapter.write_packet(&buffer[..read]).await.context("error writing to adapter")?;
                 }
             }
         }
