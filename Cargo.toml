@@ -5,9 +5,9 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.86"
-base64 = "0.22.1"
-base85 = "2.0.0"
+base116 = "0.1.8"
 clap = { version = "4.5.9", features = ["derive"] }
+serenity = "0.12.2"
 teloxide-core = { version = "0.9.1", default-features = false, features = [
     "rustls",
 ] }
