@@ -1,5 +1,5 @@
 [package]
-name = "weird-tun"
+name = "discord-tunnel"
 version = "0.1.0"
 edition = "2021"
 

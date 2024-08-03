@@ -478,6 +478,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "discord-tunnel"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base116",
+ "clap",
+ "serenity",
+ "teloxide-core",
+ "tokio",
+ "tun",
+]
+
+[[package]]
 name = "either"
 version = "1.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2172,19 +2185,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bd7c23921eeb1713a4e851530e9b9756e4fb0e89978582942612524cf09f01cd"
 dependencies = [
  "rustls-pki-types",
-]
-
-[[package]]
-name = "weird-tun"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base116",
- "clap",
- "serenity",
- "teloxide-core",
- "tokio",
- "tun",
 ]
 
 [[package]]
